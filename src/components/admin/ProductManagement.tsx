@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useProductContext, Product } from '../../context/ProductContext';
+import Papa from 'papaparse';
+import { useProductContext, Product, Category } from '../../context/ProductContext';
 import { 
   Plus, 
   Search, 
@@ -9,7 +10,8 @@ import {
   Star,
   Package,
   Filter,
-  X
+  X,
+  Upload
 } from 'lucide-react';
 
 export const ProductManagement: React.FC = () => {
@@ -18,7 +20,57 @@ export const ProductManagement: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [importResults, setImportResults] = useState<{success: number, errors: number}>({success: 0, errors: 0});
+
+  const findCategoryByName = (name: string, availableCategories: Category[]): Category | undefined => {
+    return availableCategories.find(c => c.name.toLowerCase() === name.toLowerCase());
+  };
+
+  const handleImport = (file: File) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        let successCount = 0;
+        let errorCount = 0;
+        results.data.forEach((row: any) => {
+          try {
+            const category = findCategoryByName(row.category, categories);
+            if (!category) {
+              console.warn(`Category not found for product: ${row.name}`);
+              errorCount++;
+              return;
+            }
+
+            const productData = {
+              name: row.product_name || row.name,
+              description: row.description,
+              price: parseFloat(row.price),
+              originalPrice: row.originalPrice ? parseFloat(row.originalPrice) : undefined,
+              images: row.images.split(',').map((s: string) => s.trim()),
+              category: category.id,
+              affiliateUrl: row.affiliateUrl,
+              inStock: row.inStock ? row.inStock.toLowerCase() === 'true' : true,
+              isFeatured: row.isFeatured ? row.isFeatured.toLowerCase() === 'true' : false,
+              rating: row.rating ? parseFloat(row.rating) : 0,
+              reviewsCount: row.reviewsCount ? parseInt(row.reviewsCount) : 0,
+              tags: row.tags ? row.tags.split(',').map((s: string) => s.trim()) : [],
+            };
+            addProduct(productData);
+            successCount++;
+          } catch (e) {
+            console.error('Error processing row:', row, e);
+            errorCount++;
+          }
+        });
+        setImportResults({ success: successCount, errors: errorCount });
+        setIsImportModalOpen(false);
+        // We can show a notification with the results later
+      }
+    });
+  };
 
   const filteredProducts = products.filter(product => {
     const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -46,13 +98,22 @@ export const ProductManagement: React.FC = () => {
           <h2 className="text-2xl font-bold text-gray-900">ניהול מוצרים</h2>
           <p className="text-gray-600">נהל את כל המוצרים באתר</p>
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-lg font-medium hover:from-blue-700 hover:to-purple-700 transition-all duration-200 flex items-center shadow-lg"
-        >
-          <Plus className="h-5 w-5 ml-2" />
-          הוסף מוצר חדש
-        </button>
+        <div className="flex items-center space-x-2 space-x-reverse">
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="bg-white border border-gray-300 text-gray-700 px-6 py-3 rounded-lg font-medium hover:bg-gray-50 transition-all duration-200 flex items-center shadow-sm"
+          >
+            <Upload className="h-5 w-5 ml-2" />
+            ייבוא מ-CSV
+          </button>
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-lg font-medium hover:from-blue-700 hover:to-purple-700 transition-all duration-200 flex items-center shadow-lg"
+          >
+            <Plus className="h-5 w-5 ml-2" />
+            הוסף מוצר חדש
+          </button>
+        </div>
       </div>
 
       {/* סינון וחיפוש */}
@@ -231,6 +292,127 @@ export const ProductManagement: React.FC = () => {
           initialData={editingProduct}
         />
       )}
+
+      <CsvImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImport={handleImport}
+        categories={categories}
+      />
+
+      {(importResults.success > 0 || importResults.errors > 0) && (
+        <Notification
+          type={importResults.errors > 0 ? "error" : "success"}
+          message={
+            importResults.errors > 0
+              ? `ייבוא נכשל עבור ${importResults.errors} מוצרים. ${importResults.success} מוצרים נוספו בהצלחה.`
+              : `ייבוא הושלם בהצלחה! ${importResults.success} מוצרים נוספו.`
+          }
+          onClose={() => setImportResults({ success: 0, errors: 0 })}
+        />
+      )}
+    </div>
+  );
+};
+
+// רכיב מודל לייבוא מוצרים מ-CSV
+interface CsvImportModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onImport: (file: File) => void;
+  categories: any[];
+}
+
+const CsvImportModal: React.FC<CsvImportModalProps> = ({ isOpen, onClose, onImport, categories }) => {
+  const [file, setFile] = useState<File | null>(null);
+
+  if (!isOpen) return null;
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setFile(e.target.files[0]);
+    }
+  };
+
+  const handleImport = () => {
+    if (file) {
+      onImport(file);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-75 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full">
+        <div className="p-6 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-gray-900">ייבוא מוצרים מ-CSV</h3>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 p-1 rounded"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              בחר קובץ CSV
+            </label>
+            <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+              <div className="space-y-1 text-center">
+                <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                <div className="flex text-sm text-gray-600">
+                  <label
+                    htmlFor="file-upload"
+                    className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-blue-500"
+                  >
+                    <span>העלה קובץ</span>
+                    <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept=".csv" />
+                  </label>
+                  <p className="pr-1">או גרור ושחרר</p>
+                </div>
+                <p className="text-xs text-gray-500">
+                  קובץ CSV בלבד, עד 10MB
+                </p>
+              </div>
+            </div>
+            {file && (
+              <div className="mt-4 text-sm text-gray-700">
+                <span className="font-medium">קובץ שנבחר:</span> {file.name}
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2">
+            <h4 className="text-md font-medium text-gray-800 mb-2">הוראות</h4>
+            <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+              <li>הקובץ חייב להיות בפורמט CSV.</li>
+              <li>העמודה הראשונה צריכה להיות <code className="bg-gray-100 p-1 rounded">product_name</code>.</li>
+              <li>יש לוודא שהקטגוריות בקובץ תואמות לקטגוריות הקיימות במערכת.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="flex justify-end space-x-3 space-x-reverse p-6 bg-gray-50 rounded-b-xl">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            ביטול
+          </button>
+          <button
+            type="button"
+            onClick={handleImport}
+            disabled={!file}
+            className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            ייבא מוצרים
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -244,6 +426,25 @@ interface ProductModalProps {
   title: string;
   initialData?: Product;
 }
+
+interface NotificationProps {
+  type: 'success' | 'error';
+  message: string;
+  onClose: () => void;
+}
+
+const Notification: React.FC<NotificationProps> = ({ type, message, onClose }) => {
+  return (
+    <div className={`fixed bottom-5 right-5 p-4 rounded-lg shadow-lg text-white ${type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
+      <div className="flex justify-between items-center">
+        <span>{message}</span>
+        <button onClick={onClose} className="ml-4 text-white">
+          <X size={20} />
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const ProductModal: React.FC<ProductModalProps> = ({ 
   isOpen, 
